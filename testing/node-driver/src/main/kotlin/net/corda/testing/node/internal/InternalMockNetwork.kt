@@ -385,6 +385,17 @@ open class InternalMockNetwork(private val cordappPackages: List<String>,
         return node
     }
 
+    fun <N : MockNode> restartNode(node: StartedNode<N>, nodeFactory: (MockNodeArgs) -> N): StartedNode<N> {
+        node.internals.disableDBCloseOnStop()
+        node.dispose()
+        return createNode(
+                InternalMockNodeParameters(legalName = node.internals.configuration.myLegalName, forcedID = node.internals.id),
+                nodeFactory
+        )
+    }
+
+    fun restartNode(node: StartedNode<MockNode>): StartedNode<MockNode> = restartNode(node, defaultFactory)
+
     fun baseDirectory(nodeId: Int): Path = filesystem.getPath("/nodes/$nodeId")
 
     /**

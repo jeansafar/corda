@@ -8,7 +8,6 @@ import co.paralleluniverse.strands.channels.Channels
 import com.codahale.metrics.Gauge
 import net.corda.core.concurrent.CordaFuture
 import net.corda.core.context.InvocationContext
-import net.corda.core.context.InvocationOrigin
 import net.corda.core.flows.FlowException
 import net.corda.core.flows.FlowInfo
 import net.corda.core.flows.FlowLogic
@@ -22,11 +21,7 @@ import net.corda.core.internal.concurrent.OpenFuture
 import net.corda.core.internal.concurrent.map
 import net.corda.core.internal.concurrent.openFuture
 import net.corda.core.messaging.DataFeed
-import net.corda.core.serialization.SerializationContext
-import net.corda.core.serialization.SerializationDefaults
-import net.corda.core.serialization.SerializedBytes
-import net.corda.core.serialization.deserialize
-import net.corda.core.serialization.serialize
+import net.corda.core.serialization.*
 import net.corda.core.utilities.ProgressTracker
 import net.corda.core.utilities.Try
 import net.corda.core.utilities.contextLogger
@@ -39,11 +34,6 @@ import net.corda.node.services.messaging.DeduplicationHandler
 import net.corda.node.services.messaging.ReceivedMessage
 import net.corda.node.services.statemachine.FlowStateMachineImpl.Companion.createSubFlowVersion
 import net.corda.node.services.statemachine.interceptors.*
-import net.corda.node.services.statemachine.interceptors.DumpHistoryOnErrorInterceptor
-import net.corda.node.services.statemachine.interceptors.FiberDeserializationChecker
-import net.corda.node.services.statemachine.interceptors.FiberDeserializationCheckingInterceptor
-import net.corda.node.services.statemachine.interceptors.HospitalisingInterceptor
-import net.corda.node.services.statemachine.interceptors.PrintingInterceptor
 import net.corda.node.services.statemachine.transitions.StateMachine
 import net.corda.node.utilities.AffinityExecutor
 import net.corda.nodeapi.internal.persistence.CordaPersistence
@@ -93,6 +83,8 @@ class SingleThreadedStateMachineManager(
         val startedFutures = HashMap<StateMachineRunId, OpenFuture<Unit>>()
     }
 
+    override val flowHospital: StaffedFlowHospital = StaffedFlowHospital()
+
     private val mutex = ThreadBox(InnerState())
     private val scheduler = FiberExecutorScheduler("Same thread scheduler", executor)
     // How many Fibers are running and not suspended.  If zero and stopping is true, then we are halted.
@@ -111,7 +103,6 @@ class SingleThreadedStateMachineManager(
 
     override val allStateMachines: List<FlowLogic<*>>
         get() = mutex.locked { flows.values.map { it.fiber.logic } }
-
 
     private val totalStartedFlows = metrics.counter("Flows.Started")
     private val totalFinishedFlows = metrics.counter("Flows.Finished")
@@ -698,7 +689,7 @@ class SingleThreadedStateMachineManager(
 
     private fun makeTransitionExecutor(): TransitionExecutor {
         val interceptors = ArrayList<TransitionInterceptor>()
-        interceptors.add { HospitalisingInterceptor(StaffedFlowHospital, it) }
+        interceptors.add { HospitalisingInterceptor(flowHospital, it) }
         if (serviceHub.configuration.devMode) {
             interceptors.add { DumpHistoryOnErrorInterceptor(it) }
         }
@@ -722,7 +713,7 @@ class SingleThreadedStateMachineManager(
         require(lastState.pendingDeduplicationHandlers.isEmpty())
         require(lastState.isRemoved)
         require(lastState.checkpoint.subFlowStack.size == 1)
-        sessionToFlow.none { it.value == flow.fiber.id }
+        require(flow.fiber.id !in sessionToFlow.values)
         flow.resultFuture.set(removalReason.flowReturnValue)
         lastState.flowLogic.progressTracker?.currentStep = ProgressTracker.DONE
         changesPublisher.onNext(StateMachineManager.Change.Removed(lastState.flowLogic, Try.Success(removalReason.flowReturnValue)))
