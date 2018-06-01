@@ -41,6 +41,7 @@ class MessagingExecutor(
         val amqDelayMillis = System.getProperty("amq.delivery.delay.ms", "0").toInt()
     }
 
+    @Synchronized
     fun send(message: Message, target: MessageRecipients) {
         val mqAddress = resolver.resolveTargetToArtemisQueue(target)
         val artemisMessage = cordaToArtemisMessage(message)
@@ -51,6 +52,7 @@ class MessagingExecutor(
         producer.send(SimpleString(mqAddress), artemisMessage)
     }
 
+    @Synchronized
     fun acknowledge(message: ClientMessage) {
         message.individualAcknowledge()
     }
